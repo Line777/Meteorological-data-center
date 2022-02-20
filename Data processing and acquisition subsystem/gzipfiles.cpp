@@ -1,53 +1,59 @@
 #include "_public.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-
-struct st_pid {
-  int pid;        //进程编号
-  char name[51];  //进程名称
-};
-
-CSEM sem;  //用于给共享内存加锁的信号量。
+//程序退出和2，15的处理函数
+void EXIT(int sig);
 
 int main(int argc,char *argv[]) {
-
-  //共享内存的标志
-  int shmid;
-  //获取或者创建共享内存，键值为0x5005
-  if ((shmid=shmget(0x5005,sizeof(struct st_pid),0640|IPC_CREAT))==-1) {
-    printf("shmget(0x5005) failed\n"); return -1;
-  }
-  //如果信号量已存在，获取信号量;如果信号量不存在，则创建它并初始化为value。
-  if (sem.init(0x5005)==false) {
-    printf("sem.init(0x5005) failed\n");
+  //程序的帮助
+  if (argc!=4) {
+    printf("\n");
+    printf("Using:/project/tools1/bin/gzipfiles pathname matchstr timeout\n\n");
+    printf("Example:/project/tools1/bin/gzipfiles /log/idc \"*.log.20*\" 0.02\n");
+    printf("        /project/tools1/bin/gzipfiles /tmp/idc/surfdata \"*.xml,*.json\" 0.01\n");
+    printf("        /project/tools1/bin/procctl 300 /project/tools1/bin/gzipfiles /log/idc \"*.log.20*\" 0.02\n");
+    printf("        /project/tools1/bin/procctl 300 /project/tools1/bin/gzipfiles /tmp/idc/surfdata \"*.xml,*.json\" 0.01\n\n");
+    printf("这是一个工具程序，用于压缩历史的数据文件或日志文件。\n");
+    printf("本程序把pathname目录及子目录中timeout天之前的匹配matchstr文件全部压缩，timeout可以是小数。\n");
+    printf("本程序不写日志文件，也不会在控制台输出任何信息。\n");
+    printf("本程序调用/usr/bin/gzip命令压缩文件。\n\n\n");
     return -1;
   }
-  //用于指向共享内存的结构体变量
-  struct st_pid *stpid=0;
-  //把共享内存连接到当前进程的地址空间
-  if ((stpid=(struct st_pid* )shmat(shmid,0,0))==(void*)-1) {
-    printf("shmat failed\n");
+  //关闭全部的信号和输入输出
+  CloseIOAndSignal(true);
+  signal(SIGINT,EXIT);
+  signal(SIGTERM,EXIT);
+  //获取文件超时的时间点
+  char strTimeOut[21];
+  LocalTime(strTimeOut,"yyyy-mm-dd hh:24:ss",0-(int)(atof(argv[3])*24*60*60));
+  //打开目录，CDir.OpenDir()
+  CDir Dir;
+  if (Dir.OpenDir(argv[1],argv[2],10000,true,false)==false) {
+    printf("Dir.OpenDir(%s) failed.\n",argv[1]);
     return -1;
   }
-  printf("aaa time=%d,val=%d\n",time(0),sem.value());
-  sem.P();  //加锁
-  printf("bbb time=%d,val=%d\n",time(0),sem.value());
-  printf("pid=%d,name=%s\n",stpid->pid,stpid->name);
-  stpid->pid=getpid();  //进程id
-  sleep(10);
-  strcpy(stpid->name,argv[1]);  //进程名称
-  printf("pid=%d,name=%s\n",stpid->pid,stpid->name);
-  printf("ccc time=%d,val=%d\n",time(0),sem.value());
-  sem.V();  //解锁
-  printf("ddd time=%d,val=%d\n",time(0),sem.value());
-  //把共享内存从当前进程中分离
-  shmdt(stpid);
-  //if (shmctl(shmid,IPC_RMID,0)==-1) {
-  //  printf("shmat failed\n");
-  //  return -1;
-  //}
+  //遍历目录中的文件名
+  while(true) {
+    //得到一个文件的信息，CDir.ReadDir()
+    if (Dir.ReadDir()==false) {
+      break;
+    }
+    printf("FullFileName=%s\n",Dir.m_FullFileName);
+    //与超时的时间点比较，如果更早，就需要压缩
+    if ( (strcmp(Dir.m_ModifyTime,strTimeOut)<0) && (MatchStr(Dir.m_FileName,"*.gz")==false)) {
+      char strCmd[1024];
+      SNPRINTF(strCmd,sizeof(strCmd),1000,"/usr/bin/gzip -f %s 1>/dev/null 2>/dev/null",
+               Dir.m_FullFileName);
+      if (system(strCmd)==0) {
+        printf("gzip %s ok.\n",Dir.m_FullFileName);
+      } else {
+        printf("gzip %s failed.\n",Dir.m_FullFileName);
+      }
+    }
+    //压缩文件，调用操作系统的gzip命令
+  }
   return 0;
+  }
+
+void EXIT(int sig) {
+  printf("程序退出，sig=%d\n\n",sig);
+  exit(0);
+}
